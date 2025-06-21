@@ -108,3 +108,5 @@ RUN if [ "$MODEL_TYPE" = "ACE++" ]; then \
 # Stage 3: Final image
 FROM base AS final
 COPY --from=downloader /comfyui/models /comfyui/models
+COPY --from=downloader /comfyui/custom_nodes /comfyui/custom_nodes
+COPY --from=downloader /comfyui/rgthree-comfy /comfyui/rgthree-comfy
