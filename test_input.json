@@ -7,111 +7,183 @@
       }
     ],
     "workflow": {
-      "6": {
+      "259": {
         "inputs": {
-          "text": "anime cat with massive fluffy fennec ears and a big fluffy tail blonde messy long hair blue eyes wearing a construction outfit placing a fancy black forest cake with candles on top of a dinner table of an old dark Victorian mansion lit by candlelight with a bright window to the foggy forest and very expensive stuff everywhere there are paintings on the walls",
-          "clip": ["30", 1]
+          "image": "test.png"
+        },
+        "class_type": "LoadImage",
+        "_meta": {
+          "title": "이미지 로드"
+        }
+      },
+      "242": {
+        "inputs": {
+          "width": 1024,
+          "height": 1024,
+          "interpolation": "nearest",
+          "method": "fill / crop",
+          "condition": "always",
+          "multiple_of": 0,
+          "image": ["259", 0]
+        },
+        "class_type": "ImageResize+",
+        "_meta": {
+          "title": "🔧 Image Resize"
+        }
+      },
+      "144": {
+        "inputs": {
+          "unet_name": "flux1FillDevFp8_v10.safetensors",
+          "weight_dtype": "default"
+        },
+        "class_type": "UNETLoader",
+        "_meta": {
+          "title": "확산 모델 로드"
+        }
+      },
+      "145": {
+        "inputs": {
+          "clip_name1": "clip_l.safetensors",
+          "clip_name2": "t5xxl_fp16.safetensors",
+          "type": "flux",
+          "device": "default"
+        },
+        "class_type": "DualCLIPLoader",
+        "_meta": {
+          "title": "이중 CLIP 로드"
+        }
+      },
+      "265": {
+        "inputs": {
+          "PowerLoraLoaderHeaderWidget": {
+            "type": "PowerLoraLoaderHeaderWidget"
+          },
+          "lora_1": {
+            "on": true,
+            "lora": "comfyui_portrait_lora64.safetensors",
+            "strength": 1
+          },
+          "➕ Add Lora": "",
+          "model": ["144", 0],
+          "clip": ["145", 0]
+        },
+        "class_type": "Power Lora Loader (rgthree)",
+        "_meta": {
+          "title": "Power Lora Loader (rgthree)"
+        }
+      },
+      "146": {
+        "inputs": {
+          "vae_name": "ae.safetensors"
+        },
+        "class_type": "VAELoader",
+        "_meta": {
+          "title": "VAE 로드"
+        }
+      },
+      "147": {
+        "inputs": {
+          "text": "Maintain the face and hat. Man in a red shirt is having a coffee in a coffeeshop.",
+          "clip": ["265", 1]
         },
         "class_type": "CLIPTextEncode",
         "_meta": {
-          "title": "CLIP Text Encode (Positive Prompt)"
+          "title": "CLIP 텍스트 인코딩 (프롬프트)"
         }
       },
-      "8": {
+      "148": {
         "inputs": {
-          "samples": ["31", 0],
-          "vae": ["30", 2]
+          "text": "",
+          "clip": ["145", 0]
         },
-        "class_type": "VAEDecode",
+        "class_type": "CLIPTextEncode",
         "_meta": {
-          "title": "VAE Decode"
+          "title": "CLIP 텍스트 인코딩 (프롬프트)"
         }
       },
-      "9": {
+      "152": {
         "inputs": {
-          "filename_prefix": "ComfyUI",
-          "images": ["8", 0]
+          "guidance": 50,
+          "conditioning": ["147", 0]
         },
-        "class_type": "SaveImage",
+        "class_type": "FluxGuidance",
         "_meta": {
-          "title": "Save Image"
+          "title": "FLUX 가이드"
         }
       },
-      "27": {
+      "165": {
         "inputs": {
-          "width": 512,
-          "height": 512,
-          "batch_size": 1
+          "left": 0,
+          "top": 0,
+          "right": ["242", 1],
+          "bottom": 0,
+          "feathering": 0,
+          "image": ["242", 0]
         },
-        "class_type": "EmptySD3LatentImage",
+        "class_type": "ImagePadForOutpaint",
         "_meta": {
-          "title": "EmptySD3LatentImage"
+          "title": "아웃페인팅을 위한 이미지 패딩"
         }
       },
-      "30": {
+      "150": {
         "inputs": {
-          "ckpt_name": "flux1-dev-fp8.safetensors"
+          "noise_mask": false,
+          "positive": ["152", 0],
+          "negative": ["148", 0],
+          "vae": ["146", 0],
+          "pixels": ["165", 0],
+          "mask": ["165", 1]
         },
-        "class_type": "CheckpointLoaderSimple",
+        "class_type": "InpaintModelConditioning",
         "_meta": {
-          "title": "Load Checkpoint"
+          "title": "인페인팅 모델 조건 설정"
         }
       },
-      "31": {
+      "155": {
+        "inputs": {
+          "model": ["265", 0]
+        },
+        "class_type": "DifferentialDiffusion",
+        "_meta": {
+          "title": "차등 확산"
+        }
+      },
+      "149": {
         "inputs": {
           "seed": 243057879077961,
-          "steps": 10,
+          "steps": 20,
           "cfg": 1,
           "sampler_name": "euler",
-          "scheduler": "simple",
+          "scheduler": "normal",
           "denoise": 1,
-          "model": ["30", 0],
-          "positive": ["35", 0],
-          "negative": ["33", 0],
-          "latent_image": ["27", 0]
+          "model": ["155", 0],
+          "positive": ["150", 0],
+          "negative": ["150", 1],
+          "latent_image": ["150", 2]
         },
         "class_type": "KSampler",
         "_meta": {
           "title": "KSampler"
         }
       },
-      "33": {
+      "153": {
         "inputs": {
-          "text": "",
-          "clip": ["30", 1]
+          "samples": ["149", 0],
+          "vae": ["146", 0]
         },
-        "class_type": "CLIPTextEncode",
+        "class_type": "VAEDecode",
         "_meta": {
-          "title": "CLIP Text Encode (Negative Prompt)"
+          "title": "VAE 디코드"
         }
       },
-      "35": {
-        "inputs": {
-          "guidance": 3.5,
-          "conditioning": ["6", 0]
-        },
-        "class_type": "FluxGuidance",
-        "_meta": {
-          "title": "FluxGuidance"
-        }
-      },
-      "38": {
-        "inputs": {
-          "images": ["8", 0]
-        },
-        "class_type": "PreviewImage",
-        "_meta": {
-          "title": "Preview Image"
-        }
-      },
-      "40": {
+      "243": {
         "inputs": {
           "filename_prefix": "ComfyUI",
-          "images": ["8", 0]
+          "images": ["153", 0]
         },
         "class_type": "SaveImage",
         "_meta": {
-          "title": "Save Image"
+          "title": "이미지 저장"
         }
       }
     }
