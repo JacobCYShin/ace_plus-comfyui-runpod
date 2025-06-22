@@ -72,7 +72,7 @@ RUN git clone https://github.com/rgthree/rgthree-comfy.git /comfyui/custom_nodes
 RUN git clone https://github.com/kijai/ComfyUI-KJNodes.git /comfyui/custom_nodes/ComfyUI-KJNodes
 
 # ✅ comfyui_essentials 설치 (ImageResize+ 가 제대로 작동하려면 꼭 필요)
-RUN git clone https://github.com/ltdrdata/comfyui_essentials.git /comfyui/custom_nodes/comfyui_essentials
+RUN git clone https://github.com/cubiq/ComfyUI_essentials /comfyui/custom_nodes/comfyui_essentials
 
 # Prevent pip from asking for confirmation during uninstall steps in custom nodes
 ENV PIP_NO_INPUT=1
