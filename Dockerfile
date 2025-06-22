@@ -64,10 +64,12 @@ RUN chmod +x /start.sh
 COPY scripts/comfy-node-install.sh /usr/local/bin/comfy-node-install
 RUN chmod +x /usr/local/bin/comfy-node-install
 
-# Add ACE++ required custom nodes
+# ✅ rgthree-comfy 설치 (ImageResize+ 포함) + requirements.txt 설치
 RUN git clone https://github.com/rgthree/rgthree-comfy.git /comfyui/custom_nodes/rgthree-comfy \
- && git clone https://github.com/kijai/ComfyUI-KJNodes.git /comfyui/custom_nodes/ComfyUI-KJNodes
+ && pip install -r /comfyui/custom_nodes/rgthree-comfy/requirements.txt
 
+# ✅ KJNodes 추가 설치 (선택)
+RUN git clone https://github.com/kijai/ComfyUI-KJNodes.git /comfyui/custom_nodes/ComfyUI-KJNodes
 
 # Prevent pip from asking for confirmation during uninstall steps in custom nodes
 ENV PIP_NO_INPUT=1
