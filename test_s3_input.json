@@ -1,0 +1,64 @@
+{
+  "workflow": {
+    "3": {
+      "inputs": {
+        "image": "ComfyUI_00001_.png"
+      },
+      "class_type": "LoadImage"
+    },
+    "4": {
+      "inputs": {
+        "text": "a beautiful portrait of a woman, high quality, detailed",
+        "clip": ["5", 1]
+      },
+      "class_type": "CLIPTextEncode"
+    },
+    "5": {
+      "inputs": {
+        "ckpt_name": "fluxFillFP8_v10.safetensors"
+      },
+      "class_type": "CheckpointLoaderSimple"
+    },
+    "6": {
+      "inputs": {
+        "text": "blurry, low quality, distorted",
+        "clip": ["5", 1]
+      },
+      "class_type": "CLIPTextEncode"
+    },
+    "7": {
+      "inputs": {
+        "samples": ["8", 0],
+        "vae": ["5", 2]
+      },
+      "class_type": "VAEDecode"
+    },
+    "8": {
+      "inputs": {
+        "seed": 42,
+        "steps": 20,
+        "cfg": 7.5,
+        "sampler_name": "euler",
+        "scheduler": "normal",
+        "denoise": 1.0,
+        "model": ["5", 0],
+        "positive": ["4", 0],
+        "negative": ["6", 0],
+        "latent_image": ["3", 0]
+      },
+      "class_type": "KSampler"
+    },
+    "9": {
+      "inputs": {
+        "filename_prefix": "ComfyUI"
+      },
+      "class_type": "SaveImage"
+    }
+  },
+  "images": [
+    {
+      "name": "ComfyUI_00001_.png",
+      "s3_url": "s3://your-bucket/test-images/ComfyUI_00001_.png"
+    }
+  ]
+}

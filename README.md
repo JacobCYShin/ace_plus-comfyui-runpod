@@ -91,7 +91,11 @@ Each object within the `input.images` array must contain:
 | Field Name | Type   | Required | Description                                                                                                                       |
 | ---------- | ------ | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `name`     | String | Yes      | Filename used to reference the image in the workflow (e.g., via a "Load Image" node). Must be unique within the array.            |
-| `image`    | String | Yes      | Base64 encoded string of the image. A data URI prefix (e.g., `data:image/png;base64,`) is optional and will be handled correctly. |
+| `image`    | String | No*      | Base64 encoded string of the image. A data URI prefix (e.g., `data:image/png;base64,`) is optional and will be handled correctly. |
+| `s3_url`   | String | No*      | S3 URL to download the image from (e.g., `s3://bucket-name/path/to/image.png`). Alternative to base64 encoding.                   |
+
+> [!NOTE]
+> * Either `image` (base64) or `s3_url` must be provided, but not both.
 
 > [!NOTE]
 >
@@ -153,11 +157,37 @@ To interact with your deployed RunPod endpoint:
 
 1.  **Get API Key:** Generate a key in RunPod [User Settings](https://www.runpod.io/console/serverless/user/settings) (`API Keys` section).
 2.  **Get Endpoint ID:** Find your endpoint ID on the [Serverless Endpoints](https://www.runpod.io/console/serverless/user/endpoints) page or on the `Overview` page of your endpoint.
+3.  **Configure Environment Variables:** Set up AWS credentials and S3 bucket for S3 URL functionality (optional).
+
+### Environment Variables
+
+Create a `.env` file with the following variables:
+
+```bash
+# RunPod API 설정
+RUNPOD_API_KEY=your_runpod_api_key_here
+RUNPOD_ENDPOINT_ID=your_endpoint_id_here
+
+# AWS S3 설정 (S3 URL 기능 사용 시)
+AWS_ACCESS_KEY_ID=your_aws_access_key_id
+AWS_SECRET_ACCESS_KEY=your_aws_secret_access_key
+AWS_DEFAULT_REGION=us-east-1
+S3_BUCKET_NAME=your-s3-bucket-name
+
+# 성능 모니터링 설정
+ENABLE_PERFORMANCE_MONITORING=true
+
+# ComfyUI 설정
+WEBSOCKET_RECONNECT_ATTEMPTS=5
+WEBSOCKET_RECONNECT_DELAY_S=3
+REFRESH_WORKER=false
+```
 
 ### Generate Image (Sync Example)
 
 Send a workflow to the `/runsync` endpoint (waits for completion). Replace `<api_key>` and `<endpoint_id>`. The `-d` value should contain the [JSON input described above](#input).
 
+#### Base64 Image Request
 ```bash
 curl -X POST \
   -H "Authorization: Bearer <api_key>" \
@@ -166,9 +196,27 @@ curl -X POST \
   https://api.runpod.ai/v2/<endpoint_id>/runsync
 ```
 
+#### S3 URL Image Request
+```bash
+curl -X POST \
+  -H "Authorization: Bearer <api_key>" \
+  -H "Content-Type: application/json" \
+  -d '{"input":{"workflow":{... your workflow JSON ...},"images":[{"name":"image.png","s3_url":"s3://bucket/path/image.png"}]}}' \
+  https://api.runpod.ai/v2/<endpoint_id>/runsync
+```
+
+#### Health Check Request
+```bash
+curl -X POST \
+  -H "Authorization: Bearer <api_key>" \
+  -H "Content-Type: application/json" \
+  -d '{"input":{"action":"health_check"}}' \
+  https://api.runpod.ai/v2/<endpoint_id>/run
+```
+
 You can also use the `/run` endpoint for asynchronous jobs and then poll the `/status` to see when the job is done. Or you [add a `webhook` into your request](https://docs.runpod.io/serverless/endpoints/send-requests#webhook-notifications) to be notified when the job is done.
 
-Refer to [`test_input.json`](./test_input.json) for a complete input example.
+Refer to [`test_input.json`](./test_input.json) for a complete base64 input example, or [`test_s3_input.json`](./test_s3_input.json) for an S3 URL example.
 
 ## Getting the Workflow JSON
 

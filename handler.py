@@ -13,6 +13,16 @@ import uuid
 import tempfile
 import socket
 import traceback
+import boto3
+from botocore.exceptions import ClientError
+import logging
+from datetime import datetime
+import psutil
+
+# 로깅 설정 (기존 설정이 있으면 덮어쓰지 않음)
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    logging.basicConfig(level=logging.INFO)
 
 # Time to wait between API check attempts in milliseconds
 COMFY_API_AVAILABLE_INTERVAL_MS = 50
@@ -38,6 +48,296 @@ COMFY_HOST = "127.0.0.1:8188"
 # Enforce a clean state after each job is done
 # see https://docs.runpod.io/docs/handler-additional-controls#refresh-worker
 REFRESH_WORKER = os.environ.get("REFRESH_WORKER", "false").lower() == "true"
+
+# S3 설정
+S3_BUCKET_NAME = os.environ.get("S3_BUCKET_NAME")
+AWS_REGION = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+
+# 성능 모니터링 설정
+ENABLE_PERFORMANCE_MONITORING = os.environ.get("ENABLE_PERFORMANCE_MONITORING", "true").lower() == "true"
+
+# ---------------------------------------------------------------------------
+# 성능 모니터링 클래스
+# ---------------------------------------------------------------------------
+
+class PerformanceMonitor:
+    def __init__(self):
+        self.start_time = None
+        self.metrics = {}
+        self.memory_usage = []
+        self.cpu_usage = []
+    
+    def start_monitoring(self):
+        """모니터링 시작"""
+        self.start_time = datetime.now()
+        self.metrics = {
+            "start_time": self.start_time.isoformat(),
+            "memory_usage": [],
+            "cpu_usage": [],
+            "processing_steps": []
+        }
+        logger.info(f"Performance monitoring started at {self.start_time}")
+    
+    def record_step(self, step_name, duration=None):
+        """처리 단계 기록"""
+        step_data = {
+            "step": step_name,
+            "timestamp": datetime.now().isoformat(),
+            "duration": duration
+        }
+        self.metrics["processing_steps"].append(step_data)
+        logger.info(f"Step completed: {step_name} (duration: {duration}s)")
+    
+    def record_system_metrics(self):
+        """시스템 메트릭 기록"""
+        if not ENABLE_PERFORMANCE_MONITORING:
+            return
+            
+        try:
+            memory = psutil.virtual_memory()
+            # CPU 사용률을 블로킹하지 않고 측정
+            cpu = psutil.cpu_percent(interval=None)
+            
+            self.metrics["memory_usage"].append({
+                "timestamp": datetime.now().isoformat(),
+                "percent": memory.percent,
+                "used_mb": memory.used / 1024 / 1024,
+                "available_mb": memory.available / 1024 / 1024
+            })
+            
+            self.metrics["cpu_usage"].append({
+                "timestamp": datetime.now().isoformat(),
+                "percent": cpu
+            })
+        except Exception as e:
+            logger.warning(f"Failed to record system metrics: {e}")
+    
+    def get_summary(self):
+        """성능 요약 반환"""
+        if not self.start_time:
+            return {}
+            
+        end_time = datetime.now()
+        total_duration = (end_time - self.start_time).total_seconds()
+        
+        summary = {
+            "total_duration_seconds": total_duration,
+            "start_time": self.start_time.isoformat(),
+            "end_time": end_time.isoformat(),
+            "processing_steps": self.metrics["processing_steps"],
+            "total_steps": len(self.metrics["processing_steps"])
+        }
+        
+        if self.metrics["memory_usage"]:
+            max_memory = max(m["percent"] for m in self.metrics["memory_usage"])
+            avg_memory = sum(m["percent"] for m in self.metrics["memory_usage"]) / len(self.metrics["memory_usage"])
+            summary["memory_usage"] = {
+                "max_percent": max_memory,
+                "avg_percent": avg_memory
+            }
+        
+        if self.metrics["cpu_usage"]:
+            max_cpu = max(m["percent"] for m in self.metrics["cpu_usage"])
+            avg_cpu = sum(m["percent"] for m in self.metrics["cpu_usage"]) / len(self.metrics["cpu_usage"])
+            summary["cpu_usage"] = {
+                "max_percent": max_cpu,
+                "avg_percent": avg_cpu
+            }
+        
+        return summary
+
+# 전역 성능 모니터 인스턴스
+performance_monitor = PerformanceMonitor()
+
+# ---------------------------------------------------------------------------
+# S3 관련 함수들
+# ---------------------------------------------------------------------------
+
+def get_s3_client():
+    """S3 클라이언트 생성"""
+    try:
+        # AWS 자격 증명 확인
+        aws_access_key = os.environ.get('AWS_ACCESS_KEY_ID')
+        aws_secret_key = os.environ.get('AWS_SECRET_ACCESS_KEY')
+        
+        if not aws_access_key or not aws_secret_key:
+            logger.warning("AWS credentials not configured")
+            return None
+            
+        return boto3.client(
+            's3',
+            region_name=AWS_REGION,
+            aws_access_key_id=aws_access_key,
+            aws_secret_access_key=aws_secret_key
+        )
+    except Exception as e:
+        logger.error(f"Failed to create S3 client: {e}")
+        return None
+
+def download_from_s3(s3_url, temp_dir="/tmp"):
+    """
+    S3 URL에서 파일 다운로드
+    
+    Args:
+        s3_url (str): S3 URL (s3://bucket/key 또는 https://bucket.s3.region.amazonaws.com/key)
+        temp_dir (str): 임시 파일 저장 디렉토리
+    
+    Returns:
+        str: 다운로드된 파일 경로
+    """
+    try:
+        # S3 URL 파싱
+        if s3_url.startswith('s3://'):
+            # s3://bucket/key 형식
+            parts = s3_url[5:].split('/', 1)
+            bucket = parts[0]
+            key = parts[1]
+        elif 's3.amazonaws.com' in s3_url or '.s3.' in s3_url:
+            # https://bucket.s3.region.amazonaws.com/key 형식
+            url_parts = s3_url.replace('https://', '').split('/')
+            bucket = url_parts[0].split('.')[0]
+            key = '/'.join(url_parts[1:])
+        else:
+            raise ValueError(f"Unsupported S3 URL format: {s3_url}")
+        
+        # 임시 파일 경로 생성
+        filename = os.path.basename(key) or f"download_{uuid.uuid4()}"
+        temp_file_path = os.path.join(temp_dir, filename)
+        
+        # S3에서 다운로드
+        s3_client = get_s3_client()
+        if not s3_client:
+            raise Exception("S3 client not available")
+            
+        logger.info(f"Downloading from S3: {bucket}/{key} -> {temp_file_path}")
+        s3_client.download_file(bucket, key, temp_file_path)
+        
+        return temp_file_path
+        
+    except Exception as e:
+        logger.error(f"Failed to download from S3 {s3_url}: {e}")
+        raise
+
+def upload_to_s3(file_path, s3_key=None):
+    """
+    파일을 S3에 업로드
+    
+    Args:
+        file_path (str): 업로드할 파일 경로
+        s3_key (str): S3 키 (None이면 파일명 사용)
+    
+    Returns:
+        str: S3 URL
+    """
+    try:
+        if not S3_BUCKET_NAME:
+            raise Exception("S3_BUCKET_NAME not configured")
+            
+        if not s3_key:
+            s3_key = os.path.basename(file_path)
+        
+        s3_client = get_s3_client()
+        if not s3_client:
+            raise Exception("S3 client not available")
+            
+        logger.info(f"Uploading to S3: {file_path} -> {S3_BUCKET_NAME}/{s3_key}")
+        s3_client.upload_file(file_path, S3_BUCKET_NAME, s3_key)
+        
+        return f"s3://{S3_BUCKET_NAME}/{s3_key}"
+        
+    except Exception as e:
+        logger.error(f"Failed to upload to S3 {file_path}: {e}")
+        raise
+
+# ---------------------------------------------------------------------------
+# Health Check 함수
+# ---------------------------------------------------------------------------
+
+def health_check():
+    """
+    시스템 상태 확인
+    
+    Returns:
+        dict: 시스템 상태 정보
+    """
+    health_status = {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "services": {},
+        "system": {}
+    }
+    
+    # ComfyUI 상태 확인
+    try:
+        comfy_status = _comfy_server_status()
+        health_status["services"]["comfyui"] = {
+            "status": "healthy" if comfy_status["reachable"] else "unhealthy",
+            "details": comfy_status
+        }
+        if not comfy_status["reachable"]:
+            health_status["status"] = "unhealthy"
+    except Exception as e:
+        health_status["services"]["comfyui"] = {
+            "status": "error",
+            "error": str(e)
+        }
+        health_status["status"] = "unhealthy"
+    
+    # S3 연결 상태 확인
+    try:
+        s3_client = get_s3_client()
+        if s3_client and S3_BUCKET_NAME:
+            s3_client.head_bucket(Bucket=S3_BUCKET_NAME)
+            health_status["services"]["s3"] = {
+                "status": "healthy",
+                "bucket": S3_BUCKET_NAME
+            }
+        else:
+            health_status["services"]["s3"] = {
+                "status": "not_configured"
+            }
+    except Exception as e:
+        health_status["services"]["s3"] = {
+            "status": "error",
+            "error": str(e)
+        }
+        if S3_BUCKET_NAME:
+            health_status["status"] = "unhealthy"
+    
+    # 시스템 리소스 상태
+    try:
+        memory = psutil.virtual_memory()
+        # CPU 사용률을 블로킹하지 않고 측정
+        cpu = psutil.cpu_percent(interval=None)
+        disk = psutil.disk_usage('/')
+        
+        health_status["system"] = {
+            "memory": {
+                "total_gb": memory.total / 1024 / 1024 / 1024,
+                "available_gb": memory.available / 1024 / 1024 / 1024,
+                "percent_used": memory.percent
+            },
+            "cpu": {
+                "percent_used": cpu
+            },
+            "disk": {
+                "total_gb": disk.total / 1024 / 1024 / 1024,
+                "free_gb": disk.free / 1024 / 1024 / 1024,
+                "percent_used": (disk.used / disk.total) * 100
+            }
+        }
+        
+        # 리소스 임계값 확인
+        if memory.percent > 90 or cpu > 90 or (disk.used / disk.total) * 100 > 90:
+            health_status["status"] = "warning"
+            
+    except Exception as e:
+        health_status["system"] = {
+            "status": "error",
+            "error": str(e)
+        }
+    
+    return health_status
 
 # ---------------------------------------------------------------------------
 # Helper: quick reachability probe of ComfyUI HTTP endpoint (port 8188)
@@ -157,13 +457,23 @@ def validate_input(job_input):
     # Validate 'images' in input, if provided
     images = job_input.get("images")
     if images is not None:
-        if not isinstance(images, list) or not all(
-            "name" in image and "image" in image for image in images
-        ):
-            return (
-                None,
-                "'images' must be a list of objects with 'name' and 'image' keys",
-            )
+        if not isinstance(images, list):
+            return None, "'images' must be a list"
+            
+        for i, image in enumerate(images):
+            if not isinstance(image, dict):
+                return None, f"Image at index {i} must be an object"
+            
+            if "name" not in image:
+                return None, f"Image at index {i} missing 'name' key"
+            
+            # S3 URL 또는 base64 이미지 중 하나는 있어야 함
+            if "s3_url" not in image and "image" not in image:
+                return None, f"Image at index {i} must have either 's3_url' or 'image' key"
+            
+            # 둘 다 있으면 안됨
+            if "s3_url" in image and "image" in image:
+                return None, f"Image at index {i} cannot have both 's3_url' and 'image' keys"
 
     # Return validated data and no error
     return {"workflow": workflow, "images": images}, None
@@ -207,10 +517,12 @@ def check_server(url, retries=500, delay=50):
 
 def upload_images(images):
     """
-    Upload a list of base64 encoded images to the ComfyUI server using the /upload/image endpoint.
+    Upload a list of images (base64 or S3 URL) to the ComfyUI server using the /upload/image endpoint.
 
     Args:
-        images (list): A list of dictionaries, each containing the 'name' of the image and the 'image' as a base64 encoded string.
+        images (list): A list of dictionaries, each containing the 'name' of the image and either:
+                      - 'image': base64 encoded string
+                      - 's3_url': S3 URL to download the image from
 
     Returns:
         dict: A dictionary indicating success or error.
@@ -220,68 +532,109 @@ def upload_images(images):
 
     responses = []
     upload_errors = []
+    temp_files = []  # 임시 파일 정리를 위해
 
-    print(f"worker-comfyui - Uploading {len(images)} image(s)...")
+    logger.info(f"Uploading {len(images)} image(s)...")
 
     for image in images:
+        temp_file_path = None
         try:
             name = image["name"]
-            image_data_uri = image["image"]  # Get the full string (might have prefix)
+            
+            # S3 URL 처리
+            if "s3_url" in image:
+                s3_url = image["s3_url"]
+                logger.info(f"Processing S3 image: {name} from {s3_url}")
+                
+                # S3에서 다운로드
+                temp_file_path = download_from_s3(s3_url)
+                temp_files.append(temp_file_path)
+                
+                # ComfyUI에 업로드
+                with open(temp_file_path, 'rb') as f:
+                    files = {
+                        "image": (name, f, "image/png"),
+                        "overwrite": (None, "true"),
+                    }
+                    response = requests.post(
+                        f"http://{COMFY_HOST}/upload/image", files=files, timeout=60
+                    )
+                    response.raise_for_status()
+                
+                responses.append(f"Successfully uploaded {name} from S3")
+                logger.info(f"Successfully uploaded {name} from S3")
+                
+            # Base64 처리 (기존 방식)
+            elif "image" in image:
+                image_data_uri = image["image"]
+                logger.info(f"Processing base64 image: {name}")
 
-            # --- Strip Data URI prefix if present ---
-            if "," in image_data_uri:
-                # Find the comma and take everything after it
-                base64_data = image_data_uri.split(",", 1)[1]
-            else:
-                # Assume it's already pure base64
-                base64_data = image_data_uri
-            # --- End strip ---
+                # Strip Data URI prefix if present
+                if "," in image_data_uri:
+                    base64_data = image_data_uri.split(",", 1)[1]
+                else:
+                    base64_data = image_data_uri
 
-            blob = base64.b64decode(base64_data)  # Decode the cleaned data
+                blob = base64.b64decode(base64_data)
 
-            # Prepare the form data
-            files = {
-                "image": (name, BytesIO(blob), "image/png"),
-                "overwrite": (None, "true"),
-            }
+                # Prepare the form data
+                files = {
+                    "image": (name, BytesIO(blob), "image/png"),
+                    "overwrite": (None, "true"),
+                }
 
-            # POST request to upload the image
-            response = requests.post(
-                f"http://{COMFY_HOST}/upload/image", files=files, timeout=30
-            )
-            response.raise_for_status()
+                # POST request to upload the image
+                response = requests.post(
+                    f"http://{COMFY_HOST}/upload/image", files=files, timeout=30
+                )
+                response.raise_for_status()
 
-            responses.append(f"Successfully uploaded {name}")
-            print(f"worker-comfyui - Successfully uploaded {name}")
+                responses.append(f"Successfully uploaded {name} (base64)")
+                logger.info(f"Successfully uploaded {name} (base64)")
 
         except base64.binascii.Error as e:
             error_msg = f"Error decoding base64 for {image.get('name', 'unknown')}: {e}"
-            print(f"worker-comfyui - {error_msg}")
+            logger.error(error_msg)
             upload_errors.append(error_msg)
         except requests.Timeout:
             error_msg = f"Timeout uploading {image.get('name', 'unknown')}"
-            print(f"worker-comfyui - {error_msg}")
+            logger.error(error_msg)
             upload_errors.append(error_msg)
         except requests.RequestException as e:
             error_msg = f"Error uploading {image.get('name', 'unknown')}: {e}"
-            print(f"worker-comfyui - {error_msg}")
+            logger.error(error_msg)
             upload_errors.append(error_msg)
         except Exception as e:
-            error_msg = (
-                f"Unexpected error uploading {image.get('name', 'unknown')}: {e}"
-            )
-            print(f"worker-comfyui - {error_msg}")
+            error_msg = f"Unexpected error uploading {image.get('name', 'unknown')}: {e}"
+            logger.error(error_msg)
             upload_errors.append(error_msg)
+        finally:
+            # 임시 파일 정리
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.remove(temp_file_path)
+                    if temp_file_path in temp_files:
+                        temp_files.remove(temp_file_path)
+                except OSError as e:
+                    logger.warning(f"Failed to remove temp file {temp_file_path}: {e}")
+
+    # 남은 임시 파일들 정리
+    for temp_file in temp_files[:]:  # 복사본으로 반복
+        try:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        except OSError:
+            pass
 
     if upload_errors:
-        print(f"worker-comfyui - image(s) upload finished with errors")
+        logger.error(f"Image upload finished with errors")
         return {
             "status": "error",
             "message": "Some images failed to upload",
             "details": upload_errors,
         }
 
-    print(f"worker-comfyui - image(s) upload complete")
+    logger.info(f"Image upload complete")
     return {
         "status": "success",
         "message": "All images uploaded successfully",
@@ -487,15 +840,29 @@ def handler(job):
     """
     job_input = job["input"]
     job_id = job["id"]
+    
+    # Health check 요청인지 확인
+    if job_input and isinstance(job_input, dict) and job_input.get("action") == "health_check":
+        logger.info("Health check requested")
+        return health_check()
+    
+    # 성능 모니터링 시작
+    performance_monitor.start_monitoring()
+    performance_monitor.record_step("job_started")
+    
+    logger.info(f"Starting job {job_id}")
 
     # Make sure that the input is valid
     validated_data, error_message = validate_input(job_input)
     if error_message:
+        performance_monitor.record_step("validation_failed")
         return {"error": error_message}
 
     # Extract validated data
     workflow = validated_data["workflow"]
     input_images = validated_data.get("images")
+    
+    performance_monitor.record_step("input_validated")
 
     # Make sure that the ComfyUI HTTP API is available before proceeding
     if not check_server(
@@ -503,13 +870,21 @@ def handler(job):
         COMFY_API_AVAILABLE_MAX_RETRIES,
         COMFY_API_AVAILABLE_INTERVAL_MS,
     ):
+        performance_monitor.record_step("comfyui_unavailable")
         return {
             "error": f"ComfyUI server ({COMFY_HOST}) not reachable after multiple retries."
         }
+    
+    performance_monitor.record_step("comfyui_available")
 
     # Upload input images if they exist
     if input_images:
+        upload_start = time.time()
         upload_result = upload_images(input_images)
+        upload_duration = time.time() - upload_start
+        
+        performance_monitor.record_step("image_upload", upload_duration)
+        
         if upload_result["status"] == "error":
             # Return upload errors
             return {
@@ -765,6 +1140,10 @@ def handler(job):
             print(f"worker-comfyui - Closing websocket connection.")
             ws.close()
 
+    # 성능 요약 추가
+    performance_summary = performance_monitor.get_summary()
+    performance_monitor.record_step("job_completed")
+    
     final_result = {}
 
     if output_data:
@@ -772,22 +1151,25 @@ def handler(job):
 
     if errors:
         final_result["errors"] = errors
-        print(f"worker-comfyui - Job completed with errors/warnings: {errors}")
+        logger.warning(f"Job completed with errors/warnings: {errors}")
 
     if not output_data and errors:
-        print(f"worker-comfyui - Job failed with no output images.")
+        logger.error(f"Job failed with no output images.")
         return {
             "error": "Job processing failed",
             "details": errors,
+            "performance": performance_summary
         }
     elif not output_data and not errors:
-        print(
-            f"worker-comfyui - Job completed successfully, but the workflow produced no images."
-        )
+        logger.info(f"Job completed successfully, but the workflow produced no images.")
         final_result["status"] = "success_no_images"
         final_result["images"] = []
 
-    print(f"worker-comfyui - Job completed. Returning {len(output_data)} image(s).")
+    # 성능 정보 추가
+    if ENABLE_PERFORMANCE_MONITORING:
+        final_result["performance"] = performance_summary
+
+    logger.info(f"Job completed. Returning {len(output_data)} image(s).")
     return final_result
 
 
