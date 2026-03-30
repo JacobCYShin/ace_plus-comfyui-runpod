@@ -147,7 +147,7 @@ def test_s3_request(endpoint_id, json_file, output_file="result_s3.png", timeout
 def main():
     if len(sys.argv) < 2:
         print("사용법: python3 test_s3_request.py <endpoint_id> [json_file] [output_file]")
-        print("예시: python3 test_s3_request.py jp60la4hhbubj4 test_s3_input.json result_s3.png")
+        print("예시: python3 test_s3_request.py <your_endpoint_id> test_s3_input.json result_s3.png")
         sys.exit(1)
     
     endpoint_id = sys.argv[1]

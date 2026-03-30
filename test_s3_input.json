@@ -1,64 +1,123 @@
 {
-  "workflow": {
-    "3": {
-      "inputs": {
-        "image": "ComfyUI_00001_.png"
+  "input": {
+    "workflow": {
+      "100": {
+        "class_type": "LoadImage",
+        "inputs": {
+          "image": "test.png"
+        }
       },
-      "class_type": "LoadImage"
+      "242": {
+        "inputs": {
+          "width": 1024,
+          "height": 1024,
+          "interpolation": "nearest",
+          "method": "fill / crop",
+          "condition": "always",
+          "multiple_of": 0,
+          "image": [
+            "100",
+            0
+          ]
+        },
+        "class_type": "ImageResize+",
+        "_meta": {
+          "title": "🔧 Image Resize"
+        }
+      },
+      "144": {
+        "inputs": {
+          "unet_name": "fluxFillFP8_v10.safetensors",
+          "weight_dtype": "default"
+        },
+        "class_type": "UNETLoader"
+      },
+      "145": {
+        "inputs": {
+          "vae_name": "fluxFillFP8_v10.safetensors",
+          "weight_dtype": "default"
+        },
+        "class_type": "VAELoader"
+      },
+      "146": {
+        "inputs": {
+          "clip_name": "fluxFillFP8_v10.safetensors",
+          "weight_dtype": "default"
+        },
+        "class_type": "CLIPLoader"
+      },
+      "147": {
+        "inputs": {
+          "text": "a beautiful portrait of a woman, high quality, detailed",
+          "clip": [
+            "146",
+            0
+          ]
+        },
+        "class_type": "CLIPTextEncode"
+      },
+      "148": {
+        "inputs": {
+          "text": "blurry, low quality, distorted",
+          "clip": [
+            "146",
+            0
+          ]
+        },
+        "class_type": "CLIPTextEncode"
+      },
+      "149": {
+        "inputs": {
+          "seed": 42,
+          "steps": 20,
+          "cfg": 7.5,
+          "sampler_name": "euler",
+          "scheduler": "normal",
+          "denoise": 1.0,
+          "model": [
+            "144",
+            0
+          ],
+          "positive": [
+            "147",
+            0
+          ],
+          "negative": [
+            "148",
+            0
+          ],
+          "latent_image": [
+            "242",
+            0
+          ]
+        },
+        "class_type": "KSampler"
+      },
+      "153": {
+        "inputs": {
+          "samples": [
+            "149",
+            0
+          ],
+          "vae": [
+            "145",
+            0
+          ]
+        },
+        "class_type": "VAEDecode"
+      },
+      "243": {
+        "inputs": {
+          "filename_prefix": "ComfyUI"
+        },
+        "class_type": "SaveImage"
+      }
     },
-    "4": {
-      "inputs": {
-        "text": "a beautiful portrait of a woman, high quality, detailed",
-        "clip": ["5", 1]
-      },
-      "class_type": "CLIPTextEncode"
-    },
-    "5": {
-      "inputs": {
-        "ckpt_name": "fluxFillFP8_v10.safetensors"
-      },
-      "class_type": "CheckpointLoaderSimple"
-    },
-    "6": {
-      "inputs": {
-        "text": "blurry, low quality, distorted",
-        "clip": ["5", 1]
-      },
-      "class_type": "CLIPTextEncode"
-    },
-    "7": {
-      "inputs": {
-        "samples": ["8", 0],
-        "vae": ["5", 2]
-      },
-      "class_type": "VAEDecode"
-    },
-    "8": {
-      "inputs": {
-        "seed": 42,
-        "steps": 20,
-        "cfg": 7.5,
-        "sampler_name": "euler",
-        "scheduler": "normal",
-        "denoise": 1.0,
-        "model": ["5", 0],
-        "positive": ["4", 0],
-        "negative": ["6", 0],
-        "latent_image": ["3", 0]
-      },
-      "class_type": "KSampler"
-    },
-    "9": {
-      "inputs": {
-        "filename_prefix": "ComfyUI"
-      },
-      "class_type": "SaveImage"
-    }
-  },
-  "images": [
-    {
-      "name": "ComfyUI_00001_.png",
-      "s3_url": "s3://your-bucket/test-images/ComfyUI_00001_.png"
-    }
-  ]
+    "images": [
+      {
+        "name": "test.png",
+        "s3_url": "s3://your-bucket/path/to/input-image.jpeg"
+      }
+    ]
+  }
 }

@@ -1,6 +1,6 @@
 # worker-comfyui
 
-> [ComfyUI](https://github.com/comfyanonymous/ComfyUI) as a serverless API on [RunPod](https://www.runpod.io/)
+> [ComfyUI](https://github.com/comfyanonymous/ComfyUI)를 [RunPod](https://www.runpod.io/) 서버리스 API로 실행합니다.
 
 <p align="center">
   <img src="assets/worker_sitting_in_comfy_chair.jpg" title="Worker sitting in comfy chair" />
@@ -10,202 +10,139 @@
 
 ---
 
-This project allows you to run ComfyUI workflows as a serverless API endpoint on the RunPod platform. Submit workflows via API calls and receive generated images as base64 strings or S3 URLs.
+ComfyUI 워크플로우를 RunPod 서버리스 엔드포인트로 배포하고, API 호출로 이미지를 생성/수신합니다. 입력 이미지는 `base64` 또는 `S3 URL`로 전달할 수 있습니다.
 
-## Table of Contents
+## 목차
 
-- [Quickstart](#quickstart)
-- [Available Docker Images](#available-docker-images)
-- [API Specification](#api-specification)
-- [Usage](#usage)
-- [Getting the Workflow JSON](#getting-the-workflow-json)
-- [Further Documentation](#further-documentation)
+- [빠른 시작](#빠른-시작)
+- [API 개요](#api-개요)
+- [입력 스키마](#입력-스키마)
+- [출력 스키마](#출력-스키마)
+- [환경 변수](#환경-변수)
+- [사용 예시](#사용-예시)
+- [클라이언트 스크립트](#클라이언트-스크립트)
+- [워크플로우 JSON 추출](#워크플로우-json-추출)
+- [추가 문서](#추가-문서)
 
 ---
 
-## Quickstart
+## 빠른 시작
 
-1.  🐳 Choose one of the [available Docker images](#available-docker-images) for your serverless endpoint (e.g., `runpod/worker-comfyui:<version>-sd3`).
-2.  📄 Follow the [Deployment Guide](docs/deployment.md) to set up your RunPod template and endpoint.
-3.  ⚙️ Optionally configure the worker (e.g., for S3 upload) using environment variables - see the full [Configuration Guide](docs/configuration.md).
-4.  🧪 Pick an example workflow from [`test_resources/workflows/`](./test_resources/workflows/) or [get your own](#getting-the-workflow-json).
-5.  🚀 Follow the [Usage](#usage) steps below to interact with your deployed endpoint.
+1. Docker 이미지 선택: `runpod/worker-comfyui:<version>-*` (예: `-sd3`).
+2. 배포: `docs/deployment.md`를 참고해 RunPod 템플릿/엔드포인트를 구성합니다.
+3. (선택) S3 업로드/모니터링 설정: `docs/configuration.md`의 환경 변수를 설정합니다.
+4. 워크플로우 준비: `test_resources/workflows/` 예제를 사용하거나 직접 [워크플로우 JSON 추출](#워크플로우-json-추출).
+5. 호출: 아래 [사용 예시](#사용-예시) 또는 [클라이언트 스크립트](#클라이언트-스크립트)로 테스트합니다.
 
-## Available Docker Images
+> 참고: Docker 이미지 목록은 도커 허브 `runpod/worker-comfyui`에서 확인하세요.
 
-These images are available on Docker Hub under `runpod/worker-comfyui`:
+## API 개요
 
-- **`runpod/worker-comfyui:<version>-base`**: Clean ComfyUI install with no models.
-- **`runpod/worker-comfyui:<version>-flux1-schnell`**: Includes checkpoint, text encoders, and VAE for [FLUX.1 schnell](https://huggingface.co/black-forest-labs/FLUX.1-schnell).
-- **`runpod/worker-comfyui:<version>-flux1-dev`**: Includes checkpoint, text encoders, and VAE for [FLUX.1 dev](https://huggingface.co/black-forest-labs/FLUX.1-dev).
-- **`runpod/worker-comfyui:<version>-sdxl`**: Includes checkpoint and VAEs for [Stable Diffusion XL](https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0).
-- **`runpod/worker-comfyui:<version>-sd3`**: Includes checkpoint for [Stable Diffusion 3 medium](https://huggingface.co/stabilityai/stable-diffusion-3-medium).
+- 엔드포인트: `/runsync`(동기), `/run`(비동기), `/status/{jobId}`, `/health`
+- 권장: 큰 이미지는 `base64` 대신 `S3 URL` 사용
+- 요청 크기 제한(참고): `/run` 약 10MB, `/runsync` 약 20MB
 
-Replace `<version>` with the current release tag, check the [releases page](https://github.com/runpod-workers/worker-comfyui/releases) for the latest version.
-
-## API Specification
-
-The worker exposes standard RunPod serverless endpoints (`/run`, `/runsync`, `/health`). By default, images are returned as base64 strings. You can configure the worker to upload images to an S3 bucket instead by setting specific environment variables (see [Configuration Guide](docs/configuration.md)).
-
-Use the `/runsync` endpoint for synchronous requests that wait for the job to complete and return the result directly. Use the `/run` endpoint for asynchronous requests that return immediately with a job ID; you'll need to poll the `/status` endpoint separately to get the result.
-
-### Input
+## 입력 스키마
 
 ```json
 {
   "input": {
-    "workflow": {
-      "6": {
-        "inputs": {
-          "text": "a ball on the table",
-          "clip": ["30", 1]
-        },
-        "class_type": "CLIPTextEncode",
-        "_meta": {
-          "title": "CLIP Text Encode (Positive Prompt)"
-        }
-      }
-    },
+    "workflow": { ... },
     "images": [
-      {
-        "name": "input_image_1.png",
-        "image": "data:image/png;base64,iVBOR..."
-      }
+      { "name": "input.png", "image": "data:image/png;base64,..." }
     ]
   }
 }
 ```
 
-The following tables describe the fields within the `input` object:
+- `input.workflow`: ComfyUI에서 Export(API)한 워크플로우 JSON
+- `input.images`: 선택. 아래 중 하나만 사용(상호배타)
+  - `image`: base64 문자열(선택적 data URI 프리픽스 허용)
+  - `s3_url`: `s3://bucket/path/image.png`
 
-| Field Path       | Type   | Required | Description                                                                                                                                |
-| ---------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `input`          | Object | Yes      | Top-level object containing request data.                                                                                                  |
-| `input.workflow` | Object | Yes      | The ComfyUI workflow exported in the [required format](#getting-the-workflow-json).                                                        |
-| `input.images`   | Array  | No       | Optional array of input images. Each image is uploaded to ComfyUI's `input` directory and can be referenced by its `name` in the workflow. |
-
-#### `input.images` Object
-
-Each object within the `input.images` array must contain:
-
-| Field Name | Type   | Required | Description                                                                                                                       |
-| ---------- | ------ | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `name`     | String | Yes      | Filename used to reference the image in the workflow (e.g., via a "Load Image" node). Must be unique within the array.            |
-| `image`    | String | No*      | Base64 encoded string of the image. A data URI prefix (e.g., `data:image/png;base64,`) is optional and will be handled correctly. |
-| `s3_url`   | String | No*      | S3 URL to download the image from (e.g., `s3://bucket-name/path/to/image.png`). Alternative to base64 encoding.                   |
-
-> [!NOTE]
-> * Either `image` (base64) or `s3_url` must be provided, but not both.
-
-> [!NOTE]
->
-> **Size Limits:** RunPod endpoints have request size limits (e.g., 10MB for `/run`, 20MB for `/runsync`). Large base64 input images can exceed these limits. See [RunPod Docs](https://docs.runpod.io/docs/serverless-endpoint-urls).
-
-### Output
-
-> [!WARNING]
->
-> **Breaking Change in Output Format (5.0.0+)**
->
-> Versions `< 5.0.0` returned the primary image data (S3 URL or base64 string) directly within an `output.message` field.
-> Starting with `5.0.0`, the output format has changed significantly, see below
+## 출력 스키마
 
 ```json
 {
-  "id": "sync-uuid-string",
+  "id": "...",
   "status": "COMPLETED",
   "output": {
     "images": [
-      {
-        "filename": "ComfyUI_00001_.png",
-        "type": "base64",
-        "data": "iVBORw0KGgoAAAANSUhEUg..."
-      }
+      { "filename": "ComfyUI_00001_.png", "type": "base64", "data": "..." }
     ]
   },
-  "delayTime": 123,
-  "executionTime": 4567
+  "performance_summary": { ... }
 }
 ```
 
-| Field Path      | Type             | Required | Description                                                                                                 |
-| --------------- | ---------------- | -------- | ----------------------------------------------------------------------------------------------------------- |
-| `output`        | Object           | Yes      | Top-level object containing the results of the job execution.                                               |
-| `output.images` | Array of Objects | No       | Present if the workflow generated images. Contains a list of objects, each representing one output image.   |
-| `output.errors` | Array of Strings | No       | Present if non-fatal errors or warnings occurred during processing (e.g., S3 upload failure, missing data). |
+- `output.images[*].type`: `base64` 또는 `s3_url` (S3 업로드가 활성화된 경우)
+- `performance_summary`: 처리 시간, 단계, 시스템 지표(옵션)
 
-#### `output.images`
+## 환경 변수
 
-Each object in the `output.images` array has the following structure:
-
-| Field Name | Type   | Description                                                                                     |
-| ---------- | ------ | ----------------------------------------------------------------------------------------------- |
-| `filename` | String | The original filename assigned by ComfyUI during generation.                                    |
-| `type`     | String | Indicates the format of the data. Either `"base64"` or `"s3_url"` (if S3 upload is configured). |
-| `data`     | String | Contains either the base64 encoded image string or the S3 URL for the uploaded image file.      |
-
-> [!NOTE]
-> The `output.images` field provides a list of all generated images (excluding temporary ones).
->
-> - If S3 upload is **not** configured (default), `type` will be `"base64"` and `data` will contain the base64 encoded image string.
-> - If S3 upload **is** configured, `type` will be `"s3_url"` and `data` will contain the S3 URL. See the [Configuration Guide](docs/configuration.md#example-s3-response) for an S3 example response.
-> - Clients interacting with the API need to handle this list-based structure under `output.images`.
-
-## Usage
-
-To interact with your deployed RunPod endpoint:
-
-1.  **Get API Key:** Generate a key in RunPod [User Settings](https://www.runpod.io/console/serverless/user/settings) (`API Keys` section).
-2.  **Get Endpoint ID:** Find your endpoint ID on the [Serverless Endpoints](https://www.runpod.io/console/serverless/user/endpoints) page or on the `Overview` page of your endpoint.
-3.  **Configure Environment Variables:** Set up AWS credentials and S3 bucket for S3 URL functionality (optional).
-
-### Environment Variables
-
-Create a `.env` file with the following variables:
+`.env` 예시:
 
 ```bash
-# RunPod API 설정
+# RunPod API
 RUNPOD_API_KEY=your_runpod_api_key_here
 RUNPOD_ENDPOINT_ID=your_endpoint_id_here
 
-# AWS S3 설정 (S3 URL 기능 사용 시)
+# AWS S3 (선택)
 AWS_ACCESS_KEY_ID=your_aws_access_key_id
 AWS_SECRET_ACCESS_KEY=your_aws_secret_access_key
 AWS_DEFAULT_REGION=us-east-1
 S3_BUCKET_NAME=your-s3-bucket-name
 
-# 성능 모니터링 설정
+# 성능 모니터링
 ENABLE_PERFORMANCE_MONITORING=true
 
-# ComfyUI 설정
+# ComfyUI/네트워크
 WEBSOCKET_RECONNECT_ATTEMPTS=5
 WEBSOCKET_RECONNECT_DELAY_S=3
 REFRESH_WORKER=false
 ```
 
-### Generate Image (Sync Example)
+## 사용 예시
 
-Send a workflow to the `/runsync` endpoint (waits for completion). Replace `<api_key>` and `<endpoint_id>`. The `-d` value should contain the [JSON input described above](#input).
+### 동기 요청(`/runsync`)
 
-#### Base64 Image Request
 ```bash
 curl -X POST \
   -H "Authorization: Bearer <api_key>" \
   -H "Content-Type: application/json" \
-  -d '{"input":{"workflow":{... your workflow JSON ...}}}' \
+  -d '{"input":{"workflow":{...}}}' \
   https://api.runpod.ai/v2/<endpoint_id>/runsync
 ```
 
-#### S3 URL Image Request
+S3 URL 입력 사용:
+
 ```bash
 curl -X POST \
   -H "Authorization: Bearer <api_key>" \
   -H "Content-Type: application/json" \
-  -d '{"input":{"workflow":{... your workflow JSON ...},"images":[{"name":"image.png","s3_url":"s3://bucket/path/image.png"}]}}' \
+  -d '{"input":{"workflow":{...},"images":[{"name":"image.png","s3_url":"s3://bucket/path/image.png"}]}}' \
   https://api.runpod.ai/v2/<endpoint_id>/runsync
 ```
 
-#### Health Check Request
+### 비동기 요청(`/run` + `/status`)
+
+1) 제출
+```bash
+curl -X POST \
+  -H "Authorization: Bearer <api_key>" \
+  -H "Content-Type: application/json" \
+  -d '{"input":{"workflow":{...}}}' \
+  https://api.runpod.ai/v2/<endpoint_id>/run
+```
+
+2) 상태 폴링
+```bash
+curl -H "Authorization: Bearer <api_key>" \
+  https://api.runpod.ai/v2/<endpoint_id>/status/<job_id>
+```
+
+### 헬스체크
+
 ```bash
 curl -X POST \
   -H "Authorization: Bearer <api_key>" \
@@ -214,23 +151,40 @@ curl -X POST \
   https://api.runpod.ai/v2/<endpoint_id>/run
 ```
 
-You can also use the `/run` endpoint for asynchronous jobs and then poll the `/status` to see when the job is done. Or you [add a `webhook` into your request](https://docs.runpod.io/serverless/endpoints/send-requests#webhook-notifications) to be notified when the job is done.
+## 클라이언트 스크립트
 
-Refer to [`test_input.json`](./test_input.json) for a complete base64 input example, or [`test_s3_input.json`](./test_s3_input.json) for an S3 URL example.
+`request_runpod.py` (동기):
+```bash
+export RUNPOD_API_KEY=your_runpod_api_key
+python3 request_runpod.py --endpoint-id <endpoint_id> --json fixed_input_with_loader.json --out result_sync.png
+```
 
-## Getting the Workflow JSON
+`request_runpod.py` (비동기):
+```bash
+export RUNPOD_API_KEY=your_runpod_api_key
+python3 request_runpod.py --endpoint-id <endpoint_id> --json fixed_input_with_loader.json --out result_async.png --async-mode
+```
 
-To get the correct `workflow` JSON for the API:
+`test_health_check.py`:
+```bash
+export RUNPOD_API_KEY=your_runpod_api_key
+python3 test_health_check.py <endpoint_id>
+```
 
-1.  Open ComfyUI in your browser.
-2.  In the top navigation, select `Workflow > Export (API)`
-3.  A `workflow.json` file will be downloaded. Use the content of this file as the value for the `input.workflow` field in your API requests.
+> 팁
+> - `--timeout`은 초기 POST 타임아웃입니다(폴링은 별도). 긴 작업은 비동기 권장.
+> - 큰 입력 이미지는 `S3 URL` 사용을 권장합니다.
 
-## Further Documentation
+## 워크플로우 JSON 추출
 
-- **[Deployment Guide](docs/deployment.md):** Detailed steps for deploying on RunPod.
-- **[Configuration Guide](docs/configuration.md):** Full list of environment variables (including S3 setup).
-- **[Customization Guide](docs/customization.md):** Adding custom models and nodes (Network Volumes, Docker builds).
-- **[Development Guide](docs/development.md):** Setting up a local environment for development & testing
-- **[CI/CD Guide](docs/ci-cd.md):** Information about the automated Docker build and publish workflows.
-- **[Acknowledgments](docs/acknowledgments.md):** Credits and thanks
+1. 브라우저에서 ComfyUI 열기
+2. 상단 `Workflow > Export (API)` 선택
+3. 내려받은 `workflow.json` 내용을 `input.workflow`로 사용
+
+## 추가 문서
+
+- `docs/deployment.md`: RunPod 배포 가이드
+- `docs/configuration.md`: 환경 변수/설정(S3 포함)
+- `docs/customization.md`: 모델/노드 커스터마이즈
+- `docs/development.md`: 로컬 개발/테스트
+- `docs/ci-cd.md`: CI/CD 파이프라인

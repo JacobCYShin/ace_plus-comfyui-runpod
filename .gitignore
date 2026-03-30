@@ -1,7 +1,20 @@
 .DS_Store
 venv
 .env
+.env.*
+.python-version
 data
 models
 simulated_uploaded
 __pycache__
+
+# Local outputs and ad-hoc test assets
+result*.png
+result*.jpg
+result*.jpeg
+result*.webp
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.webm

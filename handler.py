@@ -66,7 +66,7 @@ class PerformanceMonitor:
         self.metrics = {}
         self.memory_usage = []
         self.cpu_usage = []
-    
+
     def start_monitoring(self):
         """모니터링 시작"""
         self.start_time = datetime.now()
@@ -77,7 +77,7 @@ class PerformanceMonitor:
             "processing_steps": []
         }
         logger.info(f"Performance monitoring started at {self.start_time}")
-    
+
     def record_step(self, step_name, duration=None):
         """처리 단계 기록"""
         step_data = {
@@ -87,39 +87,39 @@ class PerformanceMonitor:
         }
         self.metrics["processing_steps"].append(step_data)
         logger.info(f"Step completed: {step_name} (duration: {duration}s)")
-    
+
     def record_system_metrics(self):
         """시스템 메트릭 기록"""
         if not ENABLE_PERFORMANCE_MONITORING:
             return
-            
+
         try:
             memory = psutil.virtual_memory()
             # CPU 사용률을 블로킹하지 않고 측정
             cpu = psutil.cpu_percent(interval=None)
-            
+
             self.metrics["memory_usage"].append({
                 "timestamp": datetime.now().isoformat(),
                 "percent": memory.percent,
                 "used_mb": memory.used / 1024 / 1024,
                 "available_mb": memory.available / 1024 / 1024
             })
-            
+
             self.metrics["cpu_usage"].append({
                 "timestamp": datetime.now().isoformat(),
                 "percent": cpu
             })
         except Exception as e:
             logger.warning(f"Failed to record system metrics: {e}")
-    
+
     def get_summary(self):
         """성능 요약 반환"""
         if not self.start_time:
             return {}
-            
+
         end_time = datetime.now()
         total_duration = (end_time - self.start_time).total_seconds()
-        
+
         summary = {
             "total_duration_seconds": total_duration,
             "start_time": self.start_time.isoformat(),
@@ -127,7 +127,7 @@ class PerformanceMonitor:
             "processing_steps": self.metrics["processing_steps"],
             "total_steps": len(self.metrics["processing_steps"])
         }
-        
+
         if self.metrics["memory_usage"]:
             max_memory = max(m["percent"] for m in self.metrics["memory_usage"])
             avg_memory = sum(m["percent"] for m in self.metrics["memory_usage"]) / len(self.metrics["memory_usage"])
@@ -135,7 +135,7 @@ class PerformanceMonitor:
                 "max_percent": max_memory,
                 "avg_percent": avg_memory
             }
-        
+
         if self.metrics["cpu_usage"]:
             max_cpu = max(m["percent"] for m in self.metrics["cpu_usage"])
             avg_cpu = sum(m["percent"] for m in self.metrics["cpu_usage"]) / len(self.metrics["cpu_usage"])
@@ -143,7 +143,7 @@ class PerformanceMonitor:
                 "max_percent": max_cpu,
                 "avg_percent": avg_cpu
             }
-        
+
         return summary
 
 # 전역 성능 모니터 인스턴스
@@ -159,17 +159,34 @@ def get_s3_client():
         # AWS 자격 증명 확인
         aws_access_key = os.environ.get('AWS_ACCESS_KEY_ID')
         aws_secret_key = os.environ.get('AWS_SECRET_ACCESS_KEY')
-        
+        aws_region = os.environ.get('AWS_DEFAULT_REGION', AWS_REGION)
+
+        logger.info(f"S3 configuration check:")
+        logger.info(f"  AWS_ACCESS_KEY_ID: {'SET' if aws_access_key else 'NOT SET'}")
+        logger.info(f"  AWS_SECRET_ACCESS_KEY: {'SET' if aws_secret_key else 'NOT SET'}")
+        logger.info(f"  AWS_DEFAULT_REGION: {aws_region}")
+        logger.info(f"  S3_BUCKET_NAME: {S3_BUCKET_NAME}")
+
         if not aws_access_key or not aws_secret_key:
             logger.warning("AWS credentials not configured")
             return None
-            
-        return boto3.client(
+
+        logger.info(f"Creating S3 client with region: {aws_region}")
+        s3_client = boto3.client(
             's3',
-            region_name=AWS_REGION,
+            region_name=aws_region,
             aws_access_key_id=aws_access_key,
             aws_secret_access_key=aws_secret_key
         )
+
+        # S3 클라이언트 테스트
+        try:
+            s3_client.list_buckets()
+            logger.info("S3 client created successfully and connection verified")
+        except Exception as test_e:
+            logger.error(f"S3 client created but connection test failed: {test_e}")
+
+        return s3_client
     except Exception as e:
         logger.error(f"Failed to create S3 client: {e}")
         return None
@@ -177,11 +194,11 @@ def get_s3_client():
 def download_from_s3(s3_url, temp_dir="/tmp"):
     """
     S3 URL에서 파일 다운로드
-    
+
     Args:
         s3_url (str): S3 URL (s3://bucket/key 또는 https://bucket.s3.region.amazonaws.com/key)
         temp_dir (str): 임시 파일 저장 디렉토리
-    
+
     Returns:
         str: 다운로드된 파일 경로
     """
@@ -199,21 +216,21 @@ def download_from_s3(s3_url, temp_dir="/tmp"):
             key = '/'.join(url_parts[1:])
         else:
             raise ValueError(f"Unsupported S3 URL format: {s3_url}")
-        
+
         # 임시 파일 경로 생성
         filename = os.path.basename(key) or f"download_{uuid.uuid4()}"
         temp_file_path = os.path.join(temp_dir, filename)
-        
+
         # S3에서 다운로드
         s3_client = get_s3_client()
         if not s3_client:
             raise Exception("S3 client not available")
-            
+
         logger.info(f"Downloading from S3: {bucket}/{key} -> {temp_file_path}")
         s3_client.download_file(bucket, key, temp_file_path)
-        
+
         return temp_file_path
-        
+
     except Exception as e:
         logger.error(f"Failed to download from S3 {s3_url}: {e}")
         raise
@@ -221,30 +238,30 @@ def download_from_s3(s3_url, temp_dir="/tmp"):
 def upload_to_s3(file_path, s3_key=None):
     """
     파일을 S3에 업로드
-    
+
     Args:
         file_path (str): 업로드할 파일 경로
         s3_key (str): S3 키 (None이면 파일명 사용)
-    
+
     Returns:
         str: S3 URL
     """
     try:
         if not S3_BUCKET_NAME:
             raise Exception("S3_BUCKET_NAME not configured")
-            
+
         if not s3_key:
             s3_key = os.path.basename(file_path)
-        
+
         s3_client = get_s3_client()
         if not s3_client:
             raise Exception("S3 client not available")
-            
+
         logger.info(f"Uploading to S3: {file_path} -> {S3_BUCKET_NAME}/{s3_key}")
         s3_client.upload_file(file_path, S3_BUCKET_NAME, s3_key)
-        
+
         return f"s3://{S3_BUCKET_NAME}/{s3_key}"
-        
+
     except Exception as e:
         logger.error(f"Failed to upload to S3 {file_path}: {e}")
         raise
@@ -256,7 +273,7 @@ def upload_to_s3(file_path, s3_key=None):
 def health_check():
     """
     시스템 상태 확인
-    
+
     Returns:
         dict: 시스템 상태 정보
     """
@@ -266,7 +283,7 @@ def health_check():
         "services": {},
         "system": {}
     }
-    
+
     # ComfyUI 상태 확인
     try:
         comfy_status = _comfy_server_status()
@@ -282,7 +299,7 @@ def health_check():
             "error": str(e)
         }
         health_status["status"] = "unhealthy"
-    
+
     # S3 연결 상태 확인
     try:
         s3_client = get_s3_client()
@@ -303,14 +320,14 @@ def health_check():
         }
         if S3_BUCKET_NAME:
             health_status["status"] = "unhealthy"
-    
+
     # 시스템 리소스 상태
     try:
         memory = psutil.virtual_memory()
         # CPU 사용률을 블로킹하지 않고 측정
         cpu = psutil.cpu_percent(interval=None)
         disk = psutil.disk_usage('/')
-        
+
         health_status["system"] = {
             "memory": {
                 "total_gb": memory.total / 1024 / 1024 / 1024,
@@ -326,17 +343,17 @@ def health_check():
                 "percent_used": (disk.used / disk.total) * 100
             }
         }
-        
+
         # 리소스 임계값 확인
         if memory.percent > 90 or cpu > 90 or (disk.used / disk.total) * 100 > 90:
             health_status["status"] = "warning"
-            
+
     except Exception as e:
         health_status["system"] = {
             "status": "error",
             "error": str(e)
         }
-    
+
     return health_status
 
 # ---------------------------------------------------------------------------
@@ -459,18 +476,18 @@ def validate_input(job_input):
     if images is not None:
         if not isinstance(images, list):
             return None, "'images' must be a list"
-            
+
         for i, image in enumerate(images):
             if not isinstance(image, dict):
                 return None, f"Image at index {i} must be an object"
-            
+
             if "name" not in image:
                 return None, f"Image at index {i} missing 'name' key"
-            
+
             # S3 URL 또는 base64 이미지 중 하나는 있어야 함
             if "s3_url" not in image and "image" not in image:
                 return None, f"Image at index {i} must have either 's3_url' or 'image' key"
-            
+
             # 둘 다 있으면 안됨
             if "s3_url" in image and "image" in image:
                 return None, f"Image at index {i} cannot have both 's3_url' and 'image' keys"
@@ -540,16 +557,16 @@ def upload_images(images):
         temp_file_path = None
         try:
             name = image["name"]
-            
+
             # S3 URL 처리
             if "s3_url" in image:
                 s3_url = image["s3_url"]
                 logger.info(f"Processing S3 image: {name} from {s3_url}")
-                
+
                 # S3에서 다운로드
                 temp_file_path = download_from_s3(s3_url)
                 temp_files.append(temp_file_path)
-                
+
                 # ComfyUI에 업로드
                 with open(temp_file_path, 'rb') as f:
                     files = {
@@ -560,10 +577,10 @@ def upload_images(images):
                         f"http://{COMFY_HOST}/upload/image", files=files, timeout=60
                     )
                     response.raise_for_status()
-                
+
                 responses.append(f"Successfully uploaded {name} from S3")
                 logger.info(f"Successfully uploaded {name} from S3")
-                
+
             # Base64 처리 (기존 방식)
             elif "image" in image:
                 image_data_uri = image["image"]
@@ -840,16 +857,16 @@ def handler(job):
     """
     job_input = job["input"]
     job_id = job["id"]
-    
+
     # Health check 요청인지 확인
     if job_input and isinstance(job_input, dict) and job_input.get("action") == "health_check":
         logger.info("Health check requested")
         return health_check()
-    
+
     # 성능 모니터링 시작
     performance_monitor.start_monitoring()
     performance_monitor.record_step("job_started")
-    
+
     logger.info(f"Starting job {job_id}")
 
     # Make sure that the input is valid
@@ -861,7 +878,7 @@ def handler(job):
     # Extract validated data
     workflow = validated_data["workflow"]
     input_images = validated_data.get("images")
-    
+
     performance_monitor.record_step("input_validated")
 
     # Make sure that the ComfyUI HTTP API is available before proceeding
@@ -874,7 +891,7 @@ def handler(job):
         return {
             "error": f"ComfyUI server ({COMFY_HOST}) not reachable after multiple retries."
         }
-    
+
     performance_monitor.record_step("comfyui_available")
 
     # Upload input images if they exist
@@ -882,9 +899,9 @@ def handler(job):
         upload_start = time.time()
         upload_result = upload_images(input_images)
         upload_duration = time.time() - upload_start
-        
+
         performance_monitor.record_step("image_upload", upload_duration)
-        
+
         if upload_result["status"] == "error":
             # Return upload errors
             return {
@@ -1143,7 +1160,7 @@ def handler(job):
     # 성능 요약 추가
     performance_summary = performance_monitor.get_summary()
     performance_monitor.record_step("job_completed")
-    
+
     final_result = {}
 
     if output_data:

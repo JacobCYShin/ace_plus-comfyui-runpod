@@ -3,3 +3,5 @@ websocket-client
 requests
 boto3
 psutil
+python-dotenv
+Pillow
